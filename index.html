@@ -7,6 +7,30 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <title>IBA Basketball Tournament</title>
+  
+  <!-- Firebase SDK -->
+  <script type="module">
+    import { initializeApp } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-app.js';
+    import { getFirestore, collection, getDocs, addDoc, updateDoc, deleteDoc, doc, onSnapshot } from 'https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js';
+
+    const firebaseConfig = {
+      apiKey: "AIzaSyBN0rfpzjredziJbPny-YfEgq4uE2l1hzE",
+      authDomain: "iba-website-63cb3.firebaseapp.com",
+      projectId: "iba-website-63cb3",
+      storageBucket: "iba-website-63cb3.firebasestorage.app",
+      messagingSenderId: "267064036667",
+      appId: "1:267064036667:web:4f9d28aac0d5ae4ca97b1e",
+      measurementId: "G-GGH99DCY07"
+    };
+
+    const app = initializeApp(firebaseConfig);
+    const db = getFirestore(app);
+    
+    // Make Firebase available globally
+    window.db = db;
+    window.firestoreImports = { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, onSnapshot };
+  </script>
+  
   <style>
     :root {
       --bg: #0b0f1a;
@@ -401,7 +425,7 @@
       margin-left: 0.5rem;
     }
     .admin-mode .delete-btn {
-      display: inline-block;
+      display: inline-block !important;
     }
     .delete-btn:hover {
       opacity: 0.9;
@@ -825,8 +849,52 @@
   </div>
 
   <script>
-    // Team data with records and score differentials from CSV
-    const teamsData = {
+    // Wait for Firebase to be available
+    function waitForFirebase(callback) {
+      if (window.db && window.firestoreImports) {
+        callback();
+      } else {
+        setTimeout(() => waitForFirebase(callback), 100);
+      }
+    }
+
+    waitForFirebase(() => {
+      const { collection, getDocs, addDoc, updateDoc, deleteDoc, doc, onSnapshot } = window.firestoreImports;
+      const db = window.db;
+
+      // Load games from Firestore in real-time
+      function loadGames() {
+        const gamesCollection = collection(db, 'games');
+        
+        onSnapshot(gamesCollection, (snapshot) => {
+          const tbody = document.querySelector('#scheduleTable tbody');
+          tbody.innerHTML = ''; // Clear existing rows
+          
+          snapshot.forEach((docSnapshot) => {
+            const game = docSnapshot.data();
+            const row = tbody.insertRow();
+            row.dataset.docId = docSnapshot.id;
+            row.innerHTML = `
+              <td>${game.day}</td>
+              <td>${game.time}</td>
+              <td>${game.matchup}</td>
+              <td>${game.court}</td>
+              <td>${game.round}</td>
+              <td><span class="badge">${game.status}</span></td>
+              <td>
+                <button class="edit-btn" onclick="editGame(this)">Edit</button>
+                <button class="delete-btn" onclick="deleteGame(this)">Delete</button>
+              </td>
+            `;
+          });
+        });
+      }
+
+      // Start loading games
+      loadGames();
+
+      // Teams data
+      const teamsData = {
       'mutts': {
         name: 'Mutts and Fulls',
         seed: 1,
@@ -1219,6 +1287,9 @@
     gameForm.addEventListener('submit', (e) => {
       e.preventDefault();
       
+      const { collection, addDoc, updateDoc, doc } = window.firestoreImports;
+      const db = window.db;
+      
       const day = document.getElementById('gameDay').value;
       const time = document.getElementById('gameTime').value;
       const matchup = document.getElementById('gameMatchup').value;
@@ -1226,38 +1297,32 @@
       const round = document.getElementById('gameRound').value;
       const status = document.getElementById('gameStatus').value;
 
-      if (currentEditRow) {
-        // Update existing row
-        const cells = currentEditRow.cells;
-        cells[0].textContent = day;
-        cells[1].textContent = time;
-        cells[2].textContent = matchup;
-        cells[3].textContent = court;
-        cells[4].textContent = round;
-        cells[5].innerHTML = `<span class="badge">${status}</span>`;
-      } else {
-        // Add new row
-        const tbody = document.querySelector('#scheduleTable tbody');
-        const newRow = tbody.insertRow();
-        newRow.innerHTML = `
-          <td>${day}</td>
-          <td>${time}</td>
-          <td>${matchup}</td>
-          <td>${court}</td>
-          <td>${round}</td>
-          <td><span class="badge">${status}</span></td>
-          <td>
-            <button class="edit-btn" onclick="editGame(this)">Edit</button>
-            <button class="delete-btn" onclick="deleteGame(this)">Delete</button>
-          </td>
-        `;
-      }
+      const gameData = { day, time, matchup, court, round, status };
 
-      editGameModal.classList.remove('active');
+      if (currentEditRow) {
+        // Update existing game in Firestore
+        const docId = currentEditRow.dataset.docId;
+        const gameRef = doc(db, 'games', docId);
+        updateDoc(gameRef, gameData).then(() => {
+          editGameModal.classList.remove('active');
+        }).catch(error => {
+          console.error('Error updating game:', error);
+          alert('Error updating game. Please try again.');
+        });
+      } else {
+        // Add new game to Firestore
+        addDoc(collection(db, 'games'), gameData).then(() => {
+          editGameModal.classList.remove('active');
+        }).catch(error => {
+          console.error('Error adding game:', error);
+          alert('Error adding game. Please try again.');
+        });
+      }
     });
 
     // Edit and delete functions (global scope)
     window.editGame = function(btn) {
+      if (!isAdminMode) return;
       currentEditRow = btn.closest('tr');
       const cells = currentEditRow.cells;
       
@@ -1267,14 +1332,25 @@
       document.getElementById('gameMatchup').value = cells[2].textContent;
       document.getElementById('gameCourt').value = cells[3].textContent;
       document.getElementById('gameRound').value = cells[4].textContent;
-      document.getElementById('gameStatus').value = cells[5].textContent.trim();
+      document.getElementById('gameStatus').value = cells[5].querySelector('.badge').textContent.trim();
       
       editGameModal.classList.add('active');
     };
 
     window.deleteGame = function(btn) {
+      if (!isAdminMode) return;
       if (confirm('Are you sure you want to delete this game?')) {
-        btn.closest('tr').remove();
+        const { deleteDoc, doc } = window.firestoreImports;
+        const db = window.db;
+        
+        const row = btn.closest('tr');
+        const docId = row.dataset.docId;
+        
+        const gameRef = doc(db, 'games', docId);
+        deleteDoc(gameRef).catch(error => {
+          console.error('Error deleting game:', error);
+          alert('Error deleting game. Please try again.');
+        });
       }
     };
 
@@ -1297,6 +1373,8 @@
       });
     }
     [search, dayFilter, courtFilter].forEach(el => el.addEventListener('input', applyFilters));
+    
+    }); // End of waitForFirebase
   </script>
 </body>
 </html>
